@@ -1,0 +1,177 @@
+# ---------------------------------------------------------------------------
+# Data Quality rules - declarative, versioned, reviewed like code.
+#
+# Adding a rule needs NO code change: pick a rule `type` from the catalogue
+# below (or write an `expression`), give it an id, severity and dimension.
+#
+#   severity: error   -> record is QUARANTINED (kept in silver, excluded from matching)
+#             warning -> record passes, issue is recorded and lowers its confidence
+#   scope:    record  -> evaluated per row
+#             dataset -> evaluated per source batch (completeness %, volume, etc.)
+#   sources:  optional list - restrict a rule to specific source systems
+#
+# Rule-type catalogue (src/mdm/quality/rules.py):
+#   not_null, at_least_one_of, regex, datatype, standardization_error, allowed_values,
+#   range, reference, unique, expression, timeliness, completeness, row_count
+# ---------------------------------------------------------------------------
+rules:
+  # --- Mandatory attributes / completeness --------------------------------
+  - id: DQ001
+    name: source_key_present
+    type: not_null
+    columns: [source_record_id, source_system]
+    severity: error
+    dimension: completeness
+
+  - id: DQ002
+    name: name_present
+    type: not_null
+    columns: [last_name]
+    severity: error
+    dimension: completeness
+
+  - id: DQ003
+    name: contactable
+    description: A party must be reachable by at least one channel
+    type: at_least_one_of
+    columns: [email, phone]
+    severity: error
+    dimension: completeness
+
+  # --- Datatype / format ---------------------------------------------------
+  - id: DQ010
+    name: email_format
+    type: regex
+    column: email
+    pattern: '^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$'
+    severity: warning          # bad email is dropped by survivorship, record still usable
+    dimension: validity
+
+  - id: DQ011
+    name: phone_e164
+    type: regex
+    column: phone
+    pattern: '^\+[1-9][0-9]{7,14}$'
+    severity: warning
+    dimension: validity
+
+  - id: DQ012
+    name: dob_is_date
+    type: datatype
+    column: date_of_birth
+    datatype: date
+    raw_column: date_of_birth   # if raw had a value but standardized is null -> parse failure
+    severity: warning
+    dimension: validity
+
+  - id: DQ013
+    name: value_not_standardizable
+    description: A value was supplied but could not be normalised (bad phone, impossible date, unknown country)
+    type: standardization_error
+    columns: [phone, date_of_birth, country_code, source_updated_at]
+    severity: warning
+    dimension: validity
+
+  # --- Business rules -----------------------------------------------------
+  - id: DQ020
+    name: dob_plausible
+    description: Customer must be 16-120 years old
+    type: range
+    column: date_of_birth
+    min: "today-120y"
+    max: "today-16y"
+    severity: warning
+    dimension: validity
+
+  - id: DQ021
+    name: updated_not_in_future
+    type: range
+    column: source_updated_at
+    max: "now+1d"
+    severity: error
+    dimension: validity
+
+  # --- Domain / controlled vocabulary ---------------------------------------
+  - id: DQ030
+    name: status_domain
+    type: allowed_values
+    column: status
+    values: [ACTIVE, INACTIVE, PROSPECT]
+    allow_null: true
+    severity: warning
+    dimension: validity
+
+  # --- Referential integrity against reference data ---------------------------
+  - id: DQ040
+    name: country_is_iso
+    type: reference
+    column: country_code
+    table: countries
+    reference_column: code
+    allow_null: true
+    severity: warning
+    dimension: integrity
+
+  - id: DQ041
+    name: us_state_valid
+    type: reference
+    column: state_code
+    table: us_states
+    reference_column: code
+    when: "country_code == 'US'"
+    allow_null: true
+    severity: warning
+    dimension: integrity
+
+  # --- Duplicate keys -------------------------------------------------------
+  - id: DQ050
+    name: unique_source_key
+    description: The same source key must not appear twice in a batch
+    type: unique
+    columns: [source_system, source_record_id]
+    severity: warning          # latest version wins in silver; earlier copy flagged
+    dimension: uniqueness
+
+  # --- Consistency (cross-field) - pure configuration via safe expressions ---
+  - id: DQ060
+    name: us_postal_code_shape
+    type: expression
+    expression: "country_code != 'US' or postal_code is None or (len(postal_code) == 5 and postal_code.isdigit())"
+    severity: warning
+    dimension: consistency
+
+  - id: DQ061
+    name: phone_matches_country
+    description: E.164 country prefix should agree with the address country
+    type: expression
+    expression: "phone is None or country_code is None or not (country_code in ('US','CA') and not phone.startswith('+1'))"
+    severity: warning
+    dimension: consistency
+
+  # --- Timeliness -----------------------------------------------------------
+  - id: DQ070
+    name: record_fresh
+    description: Source record touched in the last 3 years
+    type: timeliness
+    column: source_updated_at
+    max_age_days: 1095
+    severity: warning
+    dimension: timeliness
+
+  # --- Dataset-level checks -------------------------------------------------
+  - id: DQ900
+    name: email_completeness
+    type: completeness
+    scope: dataset
+    column: email
+    min_ratio: 0.60
+    severity: warning
+    dimension: completeness
+
+  - id: DQ901
+    name: batch_not_empty
+    type: row_count
+    scope: dataset
+    min: 1
+    severity: warning
+    dimension: volume

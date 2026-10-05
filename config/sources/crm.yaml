@@ -1,0 +1,45 @@
+# Data contract for the CRM system (Salesforce-style flat-file export).
+# Adding a new source = adding a file like this. No code changes.
+name: crm
+description: CRM customer export, daily CSV drop
+owner: crm-platform-team@corp.example
+format: csv
+location: crm/*.csv            # relative to paths.landing
+trust_score: 0.85              # used by survivorship (highest_confidence)
+primary_key: [cust_id]
+
+incremental:
+  mode: file_manifest          # every file processed exactly once (Auto Loader semantics)
+
+schema_evolution: rescue       # rescue | fail | evolve  (see docs/DESIGN.md#schema-evolution)
+schema:                        # the contract: expected columns + types
+  cust_id:     {type: string, required: true}
+  first_name:  {type: string}
+  last_name:   {type: string}
+  email:       {type: string}
+  phone:       {type: string}
+  dob:         {type: string}
+  address:     {type: string}
+  city:        {type: string}
+  state:       {type: string}
+  zip:         {type: string}
+  country:     {type: string}
+  status:      {type: string}
+  updated_at:  {type: string, required: true}
+
+date_formats: ["%m/%d/%Y", "%Y-%m-%d"]   # source-specific formats are tried first (US month-first)
+
+mapping:                       # canonical attribute <- source field
+  source_record_id: cust_id
+  first_name: first_name
+  last_name: last_name
+  email: email
+  phone: phone
+  date_of_birth: dob
+  address_line1: address
+  city: city
+  state_code: state
+  postal_code: zip
+  country_code: country
+  status: status
+  source_updated_at: updated_at

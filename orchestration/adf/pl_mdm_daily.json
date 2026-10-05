@@ -1,0 +1,60 @@
+{
+  "name": "pl_mdm_daily",
+  "properties": {
+    "description": "Daily MDM batch: land source extracts into ADLS (landing), then trigger the Databricks MDM job. Failures notify via Logic App -> Teams/PagerDuty.",
+    "parameters": {
+      "runDate": { "type": "string", "defaultValue": "@formatDateTime(utcnow(), 'yyyy-MM-dd')" },
+      "databricksJobId": { "type": "string" }
+    },
+    "activities": [
+      {
+        "name": "CopyCrmFromSftp",
+        "type": "Copy",
+        "policy": { "retry": 3, "retryIntervalInSeconds": 120, "timeout": "01:00:00" },
+        "typeProperties": {
+          "source": { "type": "DelimitedTextSource", "storeSettings": { "type": "SftpReadSettings", "wildcardFileName": "crm_customers_*.csv" } },
+          "sink": { "type": "DelimitedTextSink", "storeSettings": { "type": "AzureBlobFSWriteSettings" } },
+          "validateDataConsistency": true
+        },
+        "inputs": [ { "referenceName": "ds_sftp_crm", "type": "DatasetReference" } ],
+        "outputs": [ { "referenceName": "ds_adls_landing", "type": "DatasetReference", "parameters": { "folder": "crm" } } ]
+      },
+      {
+        "name": "CopyErpFromBlob",
+        "type": "Copy",
+        "policy": { "retry": 3, "retryIntervalInSeconds": 120 },
+        "typeProperties": {
+          "source": { "type": "JsonSource" },
+          "sink": { "type": "JsonSink" }
+        },
+        "inputs": [ { "referenceName": "ds_erp_exports", "type": "DatasetReference" } ],
+        "outputs": [ { "referenceName": "ds_adls_landing", "type": "DatasetReference", "parameters": { "folder": "erp_billing" } } ]
+      },
+      {
+        "name": "TriggerMdmDatabricksJob",
+        "type": "DatabricksJob",
+        "dependsOn": [
+          { "activity": "CopyCrmFromSftp", "dependencyConditions": [ "Succeeded" ] },
+          { "activity": "CopyErpFromBlob", "dependencyConditions": [ "Succeeded" ] }
+        ],
+        "policy": { "retry": 0, "timeout": "04:00:00" },
+        "linkedServiceName": { "referenceName": "ls_databricks_mdm", "type": "LinkedServiceReference" },
+        "typeProperties": {
+          "jobId": "@pipeline().parameters.databricksJobId",
+          "jobParameters": { "run_id": "@concat(pipeline().parameters.runDate, '-', pipeline().RunId)" }
+        }
+      },
+      {
+        "name": "NotifyFailure",
+        "type": "WebActivity",
+        "dependsOn": [ { "activity": "TriggerMdmDatabricksJob", "dependencyConditions": [ "Failed" ] } ],
+        "typeProperties": {
+          "url": "@pipeline().globalParameters.alertLogicAppUrl",
+          "method": "POST",
+          "body": { "pipeline": "@pipeline().Pipeline", "runId": "@pipeline().RunId", "error": "@activity('TriggerMdmDatabricksJob').error.message" }
+        }
+      }
+    ],
+    "annotations": [ "mdm", "daily" ]
+  }
+}

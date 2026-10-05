@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------------------
+# Survivorship: how the Golden Record value is chosen for each attribute.
+#
+# Each attribute has an ordered rule CHAIN. Every rule narrows the candidate
+# set; the next rule only breaks ties. Null / DQ-invalid values are always
+# removed first (non-null preference is implicit). The final tie-breaker is
+# deterministic (source priority, then source key) so reruns are idempotent.
+#
+# Rule catalogue (src/mdm/survivorship/rules.py):
+#   source_priority, most_recent, highest_confidence, most_frequent,
+#   most_complete, longest
+# ---------------------------------------------------------------------------
+source_priority: [erp_billing, crm, ecommerce, partner_api]
+
+attributes:
+  # Legal name: KYC-verified billing system first, then confidence.
+  first_name:    {rules: [source_priority, highest_confidence, most_frequent]}
+  last_name:     {rules: [source_priority, highest_confidence, most_frequent]}
+  # DOB: what most systems agree on beats a single (possibly mistyped) value.
+  date_of_birth: {rules: [most_frequent, source_priority]}
+  # Contact points change over time - the most recently updated value wins.
+  email:         {rules: [most_recent, highest_confidence]}
+  phone:         {rules: [most_recent, highest_confidence]}
+  status:        {rules: [most_recent, source_priority]}
+
+# Attribute GROUPS survive together, from a single source record, so we never
+# build a "Frankenstein" address (street from one system, postcode from another).
+groups:
+  address:
+    attributes: [address_line1, city, state_code, postal_code, country_code]
+    rules: [most_complete, most_recent, source_priority]
+
+derived:
+  full_name: "{first_name} {last_name}"

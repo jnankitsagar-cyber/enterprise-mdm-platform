@@ -1,0 +1,40 @@
+name: ci
+on:
+  push: {branches: [main]}
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r requirements.txt
+      - name: Lint
+        run: ruff check src tests data_generator
+      - name: Validate configuration (rules, mappings, survivorship)
+        run: PYTHONPATH=src python -m mdm validate-config
+      - name: Unit + end-to-end tests
+        run: pytest -q
+      - name: Demo run (accuracy gate)
+        run: PYTHONPATH=src:. python -m mdm demo
+      - uses: actions/upload-artifact@v4
+        with: {name: mdm-reports, path: reports/}
+
+  deploy-dev:
+    if: github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - run: pip wheel . -w dist --no-deps
+      - name: Deploy bundle (jobs + wheel) and sync config to the UC volume
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          databricks bundle deploy -t dev -p orchestration/databricks
+          databricks fs cp -r --overwrite config dbfs:/Volumes/mdm_dev/config/current

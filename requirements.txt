@@ -1,0 +1,10 @@
+# core (the demo runs with only these two)
+pandas>=2.0
+PyYAML>=6.0
+# optional - parquet storage + FastAPI serving (fallbacks exist when absent)
+pyarrow>=14
+fastapi>=0.110
+uvicorn>=0.29
+# dev
+pytest>=8
+ruff>=0.5

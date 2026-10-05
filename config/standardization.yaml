@@ -1,0 +1,77 @@
+# ---------------------------------------------------------------------------
+# Standardization pipeline: canonical attribute -> ordered list of functions.
+# Functions are looked up in a registry (src/mdm/standardization/functions.py).
+# To add behaviour: register a new function once, then reference it here.
+# To change behaviour per attribute: edit this file only.
+# Order matters: country_code runs before phone because phone parsing
+# uses the record's country as the default dialing region.
+# ---------------------------------------------------------------------------
+derive:                        # record-level steps that run BEFORE attribute steps
+  - split_full_name            # "SMITH, JOHN A" / "John A Smith Jr" -> first/last/suffix
+  - extract_name_suffix        # "Smith Jr" -> last_name=Smith, name_suffix=JR
+
+post_derive:                   # record-level steps that run AFTER attribute steps
+  - fill_full_name             # rebuild display full_name from standardized first + last
+
+attributes:
+  country_code:
+    - trim
+    - {fn: map_reference, args: {table: countries, default: null}}
+  first_name:
+    - trim
+    - strip_punctuation
+    - collapse_whitespace
+    - title_case
+  last_name:
+    - trim
+    - strip_punctuation
+    - collapse_whitespace
+    - title_case
+  email:
+    - trim
+    - lower
+    - fix_email_domain_typos
+    - null_placeholder_email
+  phone:
+    - {fn: phone_e164, args: {country_field: country_code, default_country: US}}
+    - null_placeholder_phone
+  date_of_birth:
+    - parse_date               # source-specific formats first (from the data contract)
+  state_code:
+    - trim
+    - {fn: map_reference, args: {table: us_states, only_when: {country_code: US}}}
+    - upper
+  postal_code:
+    - {fn: postal_code, args: {country_field: country_code}}
+  address_line1:
+    - trim
+    - collapse_whitespace
+    - upper
+    - address_abbreviations
+  city:
+    - trim
+    - collapse_whitespace
+    - title_case
+  status:
+    - {fn: controlled_vocabulary, args: {vocabulary: customer_status}}
+  source_updated_at:
+    - parse_timestamp
+
+# Controlled vocabularies: every raw variant maps to exactly one canonical code.
+vocabularies:
+  customer_status:
+    ACTIVE:   ["active", "a", "1", "true", "y", "yes", "act", "enabled"]
+    INACTIVE: ["inactive", "i", "0", "false", "n", "no", "disabled", "closed", "c"]
+    PROSPECT: ["prospect", "p", "lead", "new"]
+
+placeholders:
+  emails: ["noemail@", "none@", "test@test", "na@na", "unknown@", "no@email"]
+  phones: ["0000000000", "1111111111", "1234567890", "9999999999"]
+
+email_domain_typos:
+  gmial.com: gmail.com
+  gmal.com: gmail.com
+  gmail.co: gmail.com
+  hotmial.com: hotmail.com
+  yaho.com: yahoo.com
+  outlok.com: outlook.com

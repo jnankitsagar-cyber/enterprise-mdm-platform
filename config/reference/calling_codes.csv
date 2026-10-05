@@ -1,0 +1,7 @@
+code,calling_code,national_lengths,trunk_prefix
+US,1,10,1
+CA,1,10,1
+IN,91,10,0
+GB,44,10,0
+AU,61,9,0
+DE,49,10|11,0

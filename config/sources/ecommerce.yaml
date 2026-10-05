@@ -1,0 +1,46 @@
+# E-commerce operational database (incremental extract by high-water mark).
+name: ecommerce
+description: Web-shop users table (database extract)
+owner: digital-commerce@corp.example
+format: database
+location: ecommerce/ecommerce.db    # SQLite locally; Azure SQL / Postgres via JDBC in prod
+table: users
+trust_score: 0.70
+primary_key: [user_id]
+
+incremental:
+  mode: watermark
+  column: modified_ts           # SELECT ... WHERE modified_ts > :last_watermark
+
+schema_evolution: rescue
+schema:
+  user_id:       {type: string, required: true}
+  fname:         {type: string}
+  lname:         {type: string}
+  email_addr:    {type: string}
+  phone_no:      {type: string}
+  date_of_birth: {type: string}
+  street:        {type: string}
+  city:          {type: string}
+  state_code:    {type: string}
+  postal:        {type: string}
+  country_name:  {type: string}
+  is_active:     {type: string}
+  modified_ts:   {type: string, required: true}
+
+date_formats: ["%d-%m-%Y"]      # EU day-first format - would be mis-parsed by a generic parser
+
+mapping:
+  source_record_id: user_id
+  first_name: fname
+  last_name: lname
+  email: email_addr
+  phone: phone_no
+  date_of_birth: date_of_birth
+  address_line1: street
+  city: city
+  state_code: state_code
+  postal_code: postal
+  country_code: country_name
+  status: is_active
+  source_updated_at: modified_ts

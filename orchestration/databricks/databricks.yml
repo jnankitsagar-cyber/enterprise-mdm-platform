@@ -1,0 +1,87 @@
+# Databricks Asset Bundle: the MDM job DAG, deployed per environment by CI/CD.
+#   databricks bundle deploy -t prod
+bundle:
+  name: enterprise-mdm
+
+artifacts:
+  mdm_wheel:
+    type: whl
+    path: ../..                 # builds src/mdm into a wheel attached to every task
+
+variables:
+  catalog: {default: mdm_dev}
+  config_root: {default: /Volumes/mdm_dev/config/current}
+
+targets:
+  dev:
+    mode: development
+    default: true
+    variables: {catalog: mdm_dev, config_root: /Volumes/mdm_dev/config/current}
+  prod:
+    mode: production
+    variables: {catalog: mdm_prod, config_root: /Volumes/mdm_prod/config/current}
+    run_as: {service_principal_name: sp-mdm-prod}
+
+resources:
+  jobs:
+    mdm_daily:
+      name: mdm-daily-${bundle.target}
+      max_concurrent_runs: 1            # golden-id assignment must not race
+      timeout_seconds: 14400
+      email_notifications:
+        on_failure: [mdm-oncall@corp.example]
+      webhook_notifications:
+        on_failure: [{id: teams-mdm-alerts}]
+      health:
+        rules:
+          - {metric: RUN_DURATION_SECONDS, op: GREATER_THAN, value: 7200}
+      parameters:
+        - {name: run_id, default: "{{job.run_id}}"}
+      job_clusters:
+        - job_cluster_key: mdm_cluster
+          new_cluster:
+            spark_version: 15.4.x-scala2.12
+            node_type_id: Standard_E8ds_v5
+            autoscale: {min_workers: 2, max_workers: 20}
+            azure_attributes: {availability: SPOT_WITH_FALLBACK_AZURE, first_on_demand: 2}
+            data_security_mode: USER_ISOLATION
+            spark_conf:
+              spark.databricks.delta.optimizeWrite.enabled: "true"
+              spark.databricks.adaptive.autoOptimizeShuffle.enabled: "true"
+      tasks:
+        - task_key: bronze_ingest
+          job_cluster_key: mdm_cluster
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          spark_python_task:
+            python_file: ../../spark/jobs/01_bronze_ingest.py
+            parameters: [--catalog, "${var.catalog}", --config-root, "${var.config_root}", --run-id, "{{job.parameters.run_id}}"]
+          libraries: [{whl: ../../dist/*.whl}]
+        - task_key: silver_standardize_dq
+          depends_on: [{task_key: bronze_ingest}]
+          job_cluster_key: mdm_cluster
+          max_retries: 1
+          spark_python_task:
+            python_file: ../../spark/jobs/02_silver_standardize_dq.py
+            parameters: [--catalog, "${var.catalog}", --config-root, "${var.config_root}", --run-id, "{{job.parameters.run_id}}"]
+          libraries: [{whl: ../../dist/*.whl}]
+        - task_key: gold_identity_resolution
+          depends_on: [{task_key: silver_standardize_dq}]
+          job_cluster_key: mdm_cluster
+          spark_python_task:
+            python_file: ../../spark/jobs/03_gold_identity_resolution.py
+            parameters: [--catalog, "${var.catalog}", --config-root, "${var.config_root}", --run-id, "{{job.parameters.run_id}}"]
+          libraries: [{whl: ../../dist/*.whl}]
+        - task_key: gold_survivorship
+          depends_on: [{task_key: gold_identity_resolution}]
+          job_cluster_key: mdm_cluster
+          spark_python_task:
+            python_file: ../../spark/jobs/04_gold_survivorship.py
+            parameters: [--catalog, "${var.catalog}", --config-root, "${var.config_root}", --run-id, "{{job.parameters.run_id}}"]
+          libraries: [{whl: ../../dist/*.whl}]
+        - task_key: reconciliation_and_publish
+          depends_on: [{task_key: gold_survivorship}]
+          job_cluster_key: mdm_cluster
+          notebook_task:
+            notebook_path: ../../notebooks/reconciliation_and_publish
+            base_parameters: {catalog: "${var.catalog}", run_id: "{{job.parameters.run_id}}"}

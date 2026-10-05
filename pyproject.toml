@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "enterprise-mdm"
+version = "1.0.0"
+description = "Enterprise Master Data Platform: ingestion, standardization, data quality, identity resolution, golden records"
+requires-python = ">=3.10"
+dependencies = ["pandas>=2.0", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+parquet = ["pyarrow>=14"]
+api = ["fastapi>=0.110", "uvicorn>=0.29"]
+dev = ["pytest>=8", "ruff>=0.5", "pyarrow>=14", "fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27"]
+
+[project.scripts]
+mdm = "mdm.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+
+[tool.ruff]
+line-length = 130
+target-version = "py310"
+extend-exclude = ["spark", "notebooks"]

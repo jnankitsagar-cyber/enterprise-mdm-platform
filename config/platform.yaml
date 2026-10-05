@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# Platform-level configuration.
+# Everything environment-specific lives here so the same code runs locally
+# (paths on disk) and on Azure (abfss:// paths, Key Vault-backed secrets).
+# ---------------------------------------------------------------------------
+platform:
+  name: enterprise-mdm
+  entity: party            # the master-data domain this deployment manages
+  environment: local       # local | dev | test | prod
+
+paths:
+  landing: data/landing              # raw drops from upstream systems (ADLS: abfss://landing@<acct>.dfs.core.windows.net)
+  lakehouse: lakehouse               # bronze / silver / gold (ADLS + Delta in prod)
+  state: lakehouse/_state            # watermarks, file manifests (Auto Loader checkpoints in prod)
+  reports: reports                   # reconciliation reports, dashboard
+  ground_truth: data/ground_truth.csv
+
+sources_dir: config/sources
+standardization: config/standardization.yaml
+data_quality: config/dq_rules.yaml
+matching: config/matching.yaml
+survivorship: config/survivorship.yaml
+reference_dir: config/reference
+
+storage:
+  # parquet when pyarrow is installed, jsonl otherwise. In prod this is Delta Lake.
+  format: auto
+  serving_db: lakehouse/gold/serving.db     # SQLite locally; Azure SQL / Cosmos DB / Databricks SQL in prod
+
+ingestion:
+  max_retries: 3
+  backoff_seconds: 0.2          # exponential: 0.2, 0.4, 0.8 ...
+  dead_letter_on_parse_error: true
+
+observability:
+  log_level: INFO
+  log_format: json              # json | text
+  alerts:                       # evaluated at the end of every run
+    - name: dq_pass_rate_low
+      metric: dq.pass_rate
+      op: "<"
+      threshold: 0.85
+      severity: warning
+    - name: dead_letter_rate_high
+      metric: ingest.dead_letter_rate
+      op: ">"
+      threshold: 0.05
+      severity: critical
+    - name: reconciliation_break
+      metric: recon.exceptions_error
+      op: ">"
+      threshold: 0
+      severity: critical
+    - name: review_queue_growing
+      metric: match.review_pairs
+      op: ">"
+      threshold: 50
+      severity: warning

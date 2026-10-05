@@ -1,0 +1,36 @@
+# ERP / billing system - nested JSON extract. Most trusted for legal name & DOB (KYC-verified).
+name: erp_billing
+description: Billing accounts extract (nested JSON)
+owner: finance-systems@corp.example
+format: json
+location: erp_billing/*.json
+trust_score: 0.95
+primary_key: [account_no]
+
+incremental:
+  mode: file_manifest
+
+schema_evolution: rescue
+schema:
+  account_no:      {type: string, required: true}
+  customer:        {type: object}
+  contact:         {type: object}
+  billing_address: {type: object}
+  account_status:  {type: string}
+  last_modified:   {type: string, required: true}
+
+date_formats: ["%Y-%m-%d"]
+
+mapping:                      # dotted paths flatten nested JSON
+  source_record_id: account_no
+  full_name: customer.full_name
+  date_of_birth: customer.birth_date
+  email: contact.email
+  phone: contact.mobile
+  address_line1: billing_address.line1
+  city: billing_address.city
+  state_code: billing_address.region
+  postal_code: billing_address.postcode
+  country_code: billing_address.country
+  status: account_status
+  source_updated_at: last_modified

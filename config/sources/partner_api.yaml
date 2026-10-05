@@ -1,0 +1,48 @@
+# Loyalty partner REST API (paginated, supports ?updated_since=).
+# Locally the API is simulated by page files; set api.base_url to call a real endpoint.
+name: partner_api
+description: Loyalty partner members REST API
+owner: partnerships@corp.example
+format: rest_api
+location: partner_api           # mock pages: page_*.json
+trust_score: 0.60
+primary_key: [member_id]
+
+api:
+  base_url: null                # e.g. https://partner.example.com/v1/members
+  auth: key_vault:partner-api-key   # resolved from Azure Key Vault in prod; never in config
+  page_size: 100
+  timeout_seconds: 10
+  simulate_transient_failures: 1    # demo: first call fails, retry policy recovers
+
+incremental:
+  mode: watermark
+  column: updated               # passed as ?updated_since=<watermark>
+
+schema_evolution: rescue
+schema:
+  member_id: {type: string, required: true}
+  name:      {type: string}
+  email:     {type: string}
+  phone:     {type: string}
+  dob:       {type: string}
+  address:   {type: object}
+  country:   {type: string}
+  status:    {type: string}
+  updated:   {type: string, required: true}
+
+date_formats: ["%Y%m%d"]
+
+mapping:
+  source_record_id: member_id
+  full_name: name
+  email: email
+  phone: phone
+  date_of_birth: dob
+  address_line1: address.street
+  city: address.city
+  state_code: address.state
+  postal_code: address.zip
+  country_code: country
+  status: status
+  source_updated_at: updated

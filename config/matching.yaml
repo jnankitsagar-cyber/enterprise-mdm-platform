@@ -1,0 +1,115 @@
+# ---------------------------------------------------------------------------
+# Identity resolution configuration.
+#
+# Pipeline:  blocking -> deterministic rules -> probabilistic score
+#            -> veto rules -> thresholds -> constrained clustering
+#
+# See docs/MATCHING.md for the derivation of weights and thresholds.
+# ---------------------------------------------------------------------------
+
+# 1) BLOCKING - only records sharing at least one blocking key are compared.
+#    Turns O(n^2) into ~O(n * avg_block_size). Multiple passes keep recall high.
+blocking:
+  max_block_size: 200          # blocks bigger than this are skipped + logged (hot keys)
+  passes:
+    - name: email
+      keys: [email]
+    - name: phone
+      keys: [phone]
+    - name: lastname_dob
+      keys: [{fn: soundex, column: last_name}, date_of_birth]
+    - name: name_postal
+      keys: [{fn: first_char, column: first_name}, {fn: soundex, column: last_name}, postal_code]
+    - name: canonical_firstname_lastname
+      keys: [{fn: nickname_root, column: first_name}, {fn: lower, column: last_name}]
+
+# 2) DETERMINISTIC RULES - high-precision shortcuts (evaluated before scoring).
+deterministic_rules:
+  - name: R1_email_and_lastname
+    all:
+      - {column: email, op: exact}
+      - {column: last_name, op: jaro_winkler, min: 0.88}
+  - name: R2_phone_dob_firstname
+    all:
+      - {column: phone, op: exact}
+      - {column: date_of_birth, op: exact}
+      - {column: first_name, op: name_similarity, min: 0.80}
+
+# 3) PROBABILISTIC (Fellegi-Sunter) - each comparison has agreement levels.
+#    weight(level) = log2(m / u). Null on either side => weight 0 (no evidence).
+#    m = P(level | true match), u = P(level | non-match)
+comparisons:
+  first_name:
+    method: name_similarity     # Jaro-Winkler + nickname canonicalisation
+    levels:
+      - {name: exact,  min: 1.00, m: 0.70, u: 0.020}
+      - {name: high,   min: 0.90, m: 0.20, u: 0.030}
+      - {name: medium, min: 0.80, m: 0.06, u: 0.050}
+    else: {m: 0.04, u: 0.920}
+  last_name:
+    method: jaro_winkler
+    levels:
+      - {name: exact,  min: 1.00, m: 0.80, u: 0.010}
+      - {name: high,   min: 0.92, m: 0.15, u: 0.010}
+    else: {m: 0.05, u: 0.985}
+  date_of_birth:
+    method: date
+    levels:
+      - {name: exact,      min: 1.00, m: 0.90, u: 0.001}
+      - {name: transposed, min: 0.90, m: 0.04, u: 0.001}   # day/month swapped
+      - {name: same_year,  min: 0.50, m: 0.03, u: 0.050}
+    else: {m: 0.03, u: 0.948}
+  email:
+    method: exact
+    levels:
+      - {name: exact, min: 1.00, m: 0.75, u: 0.0005}
+    else: {m: 0.25, u: 0.9995}
+  phone:
+    method: exact
+    levels:
+      - {name: exact, min: 1.00, m: 0.70, u: 0.0005}
+    else: {m: 0.30, u: 0.9995}
+  address_line1:
+    method: token_jaccard
+    levels:
+      - {name: exact, min: 1.00, m: 0.60, u: 0.001}
+      - {name: high,  min: 0.60, m: 0.20, u: 0.005}
+    else: {m: 0.20, u: 0.994}
+  postal_code:
+    method: exact
+    levels:
+      - {name: exact, min: 1.00, m: 0.80, u: 0.01}
+    else: {m: 0.20, u: 0.99}
+
+# Prior probability that two records in the same block are the same entity.
+prior_match_probability: 0.02
+
+# 4) VETO RULES - false-positive mitigation. A veto forces NO_MATCH regardless of score.
+veto_rules:
+  - name: V1_dob_conflict
+    description: Both DOBs present, not equal and not a day/month transposition
+    type: dob_conflict
+  - name: V2_generational_suffix
+    description: JR vs SR / II vs III in the name
+    type: generational_suffix_conflict
+  - name: V4_first_name_conflict
+    description: Household members sharing an email/phone/address (Mark vs Linda Thompson)
+    type: first_name_conflict
+    max_similarity: 0.70
+  - name: V3_same_source_different_key_strong_conflict
+    description: Same source, different key, AND different email + phone => likely distinct people
+    type: same_source_conflict
+
+# 5) THRESHOLDS on match probability (0-1)
+thresholds:
+  auto_match: 0.95      # >= : merged automatically
+  review: 0.60          # [review, auto_match) : sent to data-steward review queue
+                        # <  review : non-match
+  # Names alone never auto-merge: at least one strong identifier must AGREE,
+  # otherwise the pair is capped at the review band (common-name protection).
+  auto_match_requires_any: [email, phone, date_of_birth, address_line1]
+
+# 6) CLUSTERING - union-find over auto-match edges, highest score first,
+#    refusing any union that would put two vetoed records in one cluster.
+clustering:
+  max_cluster_size: 12   # bigger clusters are suspicious (over-merging) -> flagged
